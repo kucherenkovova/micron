@@ -1,0 +1,26 @@
+run:
+  tests: true
+  skip-dirs-use-default: true
+
+linters:
+  enable-all: true
+  disable:
+    - deadcode
+    - scopelint
+    - exhaustruct
+    - exhaustivestruct
+    - varnamelen
+    - testpackage
+    - goerr113
+    - maligned
+    - godox
+    - paralleltest
+    - gci
+
+# all available settings of specific linters
+linters-settings:
+  misspell:
+    locale: US
+  maligned:
+    # print struct with more effective memory layout or not, false by default
+    suggest-new: true
