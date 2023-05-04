@@ -41,6 +41,7 @@ func (a *App) Start(ctx context.Context) error {
 	a.mu.Lock()
 	if a.state != uninitialized {
 		a.mu.Unlock()
+
 		return fmt.Errorf("can't start application in %s state", a.state)
 	}
 
@@ -52,11 +53,13 @@ func (a *App) Start(ctx context.Context) error {
 			return err
 		}
 	}
+
 	a.state = initialized
 
 	for _, r := range a.runners {
 		a.run(ctx, r)
 	}
+
 	a.state = running
 	a.mu.Unlock()
 	a.wg.Wait()
@@ -70,6 +73,7 @@ func (a *App) Stop(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	defer a.recover()
+
 	if a.state != running {
 		return fmt.Errorf("can't stop application in %s state", a.state)
 	}
@@ -85,7 +89,9 @@ func (a *App) Stop(ctx context.Context) error {
 	log.Println("call cancel")
 	a.cancel()
 	log.Println("set state as stopped")
+
 	a.state = stopped
+
 	return nil
 }
 
@@ -106,6 +112,7 @@ func (a *App) Run(r Runner) {
 	if i, ok := r.(Initializer); ok {
 		a.initializers = append(a.initializers, i)
 	}
+
 	if s, ok := r.(Closer); ok {
 		a.closers = append(a.closers, s)
 	}
@@ -122,6 +129,7 @@ func (a *App) Close(c Closer) {
 // run safely invokes Runner component in a goroutine with panic recovery mechanism.
 func (a *App) run(ctx context.Context, r Runner) {
 	a.wg.Add(1)
+
 	go func() {
 		defer a.wg.Done()
 		defer a.recover()
@@ -141,6 +149,7 @@ func (a *App) recover() {
 	if a.panicHandler != nil {
 		a.panicHandler(r)
 	}
+
 	log.Printf("recovered from panic: %v", r)
 	a.setError(fmt.Errorf("panic: %v", r))
 }
@@ -154,6 +163,7 @@ func (a *App) setError(err error) {
 
 func (a *App) setupGracefulShutdown(ctx context.Context) {
 	defer a.cancel()
+
 	signaled := make(chan os.Signal, 1)
 	signal.Notify(signaled, syscall.SIGINT, syscall.SIGTERM)
 	select {
@@ -168,9 +178,10 @@ func (a *App) setupGracefulShutdown(ctx context.Context) {
 // initialize is a helper function to safely invoke Initializer component with panic recovery mechanism.
 func (a *App) initialize(ctx context.Context, i Initializer) error {
 	defer a.recover()
-	err := i.Init(ctx)
-	if err != nil {
+
+	if err := i.Init(ctx); err != nil {
 		return fmt.Errorf("failed to initialize component: %w", err)
 	}
+
 	return nil
 }

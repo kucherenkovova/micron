@@ -14,8 +14,8 @@ import (
 //go:generate mockgen -source=app_test.go -package=mocks -destination=mocks/irc.go -aux_files=github.com/kucherenkovova/micron=component.go irc
 //go:generate mockgen -source=component.go -package=mocks -destination=mocks/component.go Runner,Initializer,Closer
 
-// this interface is used only for mocks generation
-type irc interface {
+// this interface is used only for mocks generation.
+type irc interface { //nolint:unused
 	Initializer
 	Runner
 	Closer
@@ -53,6 +53,7 @@ func (ts *tSuite) TestApp_InitOrder() {
 
 	ts.app.Init(first)
 	ts.app.Init(second)
+
 	go func() {
 		<-time.After(10 * time.Millisecond)
 		ts.NoError(ts.app.Stop(context.Background()))
@@ -74,6 +75,7 @@ func (ts *tSuite) TestApp_InitAndRunOrder() {
 
 	ts.app.Init(initme)
 	ts.app.Run(runme)
+
 	go func() {
 		<-time.After(10 * time.Millisecond)
 		ts.NoError(ts.app.Stop(context.Background()))
@@ -93,6 +95,7 @@ func (ts *tSuite) TestApp_CloseOrder() {
 
 	ts.app.Close(second)
 	ts.app.Close(first)
+
 	go func() {
 		<-time.After(10 * time.Millisecond)
 		ts.NoError(ts.app.Stop(context.Background()))
@@ -108,6 +111,7 @@ func (ts *tSuite) TestApp_HandleRunPanic() {
 	ts.app.Run(RunFunc(func(ctx context.Context) error {
 		panic("ooops")
 	}))
+
 	err := ts.app.Start(ctx)
 	ts.Error(err)
 	ts.ErrorContains(err, "panic: ooops")
@@ -119,6 +123,7 @@ func (ts *tSuite) TestApp_HandleInitPanic() {
 	ts.app.Init(InitFunc(func(ctx context.Context) error {
 		panic("ooops")
 	}))
+
 	err := ts.app.Start(ctx)
 
 	ts.Error(err)
@@ -126,9 +131,11 @@ func (ts *tSuite) TestApp_HandleInitPanic() {
 }
 
 func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
-	ctx := context.Background()
-	alertCalled := false
-	var alertCalledWith any
+	var (
+		alertCalledWith any
+		alertCalled     = false
+		ctx             = context.Background()
+	)
 
 	ts.app.OnPanic(func(a any) {
 		alertCalled = true
@@ -137,6 +144,7 @@ func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
 	ts.app.Init(InitFunc(func(ctx context.Context) error {
 		panic("ooops")
 	}))
+
 	err := ts.app.Start(ctx)
 
 	ts.Error(err)
@@ -155,6 +163,7 @@ func (ts *tSuite) TestApp_RunInitializerCloserComponent() {
 	)
 
 	ts.app.Run(component)
+
 	go func() {
 		<-time.After(10 * time.Millisecond)
 		ts.NoError(ts.app.Stop(context.Background()))
