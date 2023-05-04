@@ -7,6 +7,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/suite"
+	"go.uber.org/goleak"
 
 	"github.com/kucherenkovova/micron/mocks"
 )
@@ -95,6 +96,31 @@ func (ts *tSuite) TestApp_CloseOrder() {
 
 	ts.app.Close(second)
 	ts.app.Close(first)
+
+	go func() {
+		<-time.After(10 * time.Millisecond)
+		ts.NoError(ts.app.Stop(context.Background()))
+		close(ts.done)
+	}()
+	ts.NoError(ts.app.Start(ctx))
+	<-ts.done
+}
+
+func (ts *tSuite) TestApp_NoLeakedGoroutines() {
+	defer goleak.VerifyNone(ts.T())
+
+	ctx := context.Background()
+
+	ts.app.Init(InitFunc(func(context.Context) error {
+		return nil
+	}))
+	ts.app.Run(RunFunc(func(context.Context) error {
+		return nil
+	}))
+	ts.app.Close(CloseFunc(func(context.Context) error {
+		return nil
+	}))
+	ts.app.OnPanic(func(any) {})
 
 	go func() {
 		<-time.After(10 * time.Millisecond)
