@@ -179,7 +179,7 @@ func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
 	ts.NotNil(alertCalledWith)
 }
 
-func (ts *tSuite) TestApp_RunInitializerCloserComponent() {
+func (ts *tSuite) TestApp_RegisterInitializerCloserComponent() {
 	ctx := context.Background()
 	component := mocks.NewMockirc(ts.ctrl)
 	gomock.InOrder(
@@ -188,7 +188,7 @@ func (ts *tSuite) TestApp_RunInitializerCloserComponent() {
 		component.EXPECT().Close(gomock.Any()).Times(1).Return(nil),
 	)
 
-	ts.app.Run(component)
+	ts.app.Register(component)
 
 	go func() {
 		<-time.After(10 * time.Millisecond)
