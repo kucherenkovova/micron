@@ -26,6 +26,7 @@ func (l Level) String() string {
 	case ERROR:
 		return "ERROR"
 	}
+
 	return "DEBUG"
 }
 
@@ -39,6 +40,7 @@ func New(level Level) *Logger {
 	for lvl := ERROR; lvl >= DEBUG; lvl-- {
 		if level > lvl {
 			l.inner[lvl] = log.New(io.Discard, lvl.String()+" ", log.LstdFlags)
+
 			continue
 		}
 
