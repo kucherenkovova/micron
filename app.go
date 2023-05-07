@@ -3,12 +3,20 @@ package micron
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/kucherenkovova/micron/logger"
 )
+
+type Logger interface {
+	Debug(string)
+	Info(string)
+	Warn(string)
+	Error(string)
+}
 
 type App struct {
 	// state stores current App state
@@ -31,10 +39,21 @@ type App struct {
 	mu      sync.Mutex
 	wg      sync.WaitGroup
 	errOnce sync.Once
+	log     Logger
 }
 
-func NewApp() *App {
-	return &App{}
+type Option func(*App)
+
+func NewApp(opts ...Option) *App {
+	app := &App{
+		log: logger.New(logger.DEBUG),
+	}
+
+	for _, option := range opts {
+		option(app)
+	}
+
+	return app
 }
 
 func (a *App) Start(ctx context.Context) error {
@@ -82,13 +101,12 @@ func (a *App) Stop(ctx context.Context) error {
 	// Close components in reverse order
 	for i := len(a.closers) - 1; i >= 0; i-- {
 		if err := a.closers[i].Close(ctx); err != nil {
-			// todo: add warning
-			log.Printf("failed to stop component: %v", err)
+			a.log.Warn(fmt.Sprintf("failed to stop component: %v", err))
 		}
 	}
-	log.Println("call cancel")
+	a.log.Debug("call cancel func")
 	a.cancel()
-	log.Println("set state as stopped")
+	a.log.Debug("set state as stopped")
 
 	a.state = stopped
 
@@ -99,7 +117,7 @@ func (a *App) Stop(ctx context.Context) error {
 // implements multiple micron lifecycle hooks.
 func (a *App) Register(component any) *App {
 	if component == nil {
-		log.Println("[warning] nil component registered")
+		a.log.Warn("nil component registered")
 
 		return a
 	}
@@ -122,7 +140,7 @@ func (a *App) Register(component any) *App {
 	}
 
 	if !knownComponentType {
-		log.Printf("[warning] unknown component registered: %v\n", component)
+		a.log.Warn(fmt.Sprintf("unknown component registered: %v", component))
 	}
 
 	return a
@@ -181,7 +199,7 @@ func (a *App) recover() {
 		a.panicHandler(r)
 	}
 
-	log.Printf("recovered from panic: %v", r)
+	a.log.Error(fmt.Sprintf("recovered from panic: %v", r))
 	a.setError(fmt.Errorf("panic: %v", r))
 }
 
@@ -199,7 +217,7 @@ func (a *App) setupGracefulShutdown(ctx context.Context) {
 	signal.Notify(signaled, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case s := <-signaled:
-		log.Printf("exiting %s", s)
+		a.log.Debug(fmt.Sprintf("exiting %s", s))
 		signal.Stop(signaled)
 	case <-ctx.Done():
 		signal.Stop(signaled)
