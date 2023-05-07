@@ -95,35 +95,66 @@ func (a *App) Stop(ctx context.Context) error {
 	return nil
 }
 
+// Register is a shorthand function to register a component that
+// implements multiple micron lifecycle hooks.
+func (a *App) Register(component any) *App {
+	if component == nil {
+		log.Println("[warning] nil component registered")
+
+		return a
+	}
+
+	knownComponentType := false
+
+	if i, ok := component.(Initializer); ok {
+		a.initializers = append(a.initializers, i)
+		knownComponentType = true
+	}
+
+	if r, ok := component.(Runner); ok {
+		a.runners = append(a.runners, r)
+		knownComponentType = true
+	}
+
+	if s, ok := component.(Closer); ok {
+		a.closers = append(a.closers, s)
+		knownComponentType = true
+	}
+
+	if !knownComponentType {
+		log.Printf("[warning] unknown component registered: %v\n", component)
+	}
+
+	return a
+}
+
 // Init registers Initializer component.
 // Initializer components are invoked during application Start process before Run happens.
-func (a *App) Init(i Initializer) {
+func (a *App) Init(i Initializer) *App {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.initializers = append(a.initializers, i)
+	a.mu.Unlock()
+
+	return a
 }
 
 // Run registers Runner component.
-func (a *App) Run(r Runner) {
+func (a *App) Run(r Runner) *App {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.runners = append(a.runners, r)
+	a.mu.Unlock()
 
-	if i, ok := r.(Initializer); ok {
-		a.initializers = append(a.initializers, i)
-	}
-
-	if s, ok := r.(Closer); ok {
-		a.closers = append(a.closers, s)
-	}
+	return a
 }
 
 // Close registers Closer component.
 // Closer components are invoked during application Stop process.
-func (a *App) Close(c Closer) {
+func (a *App) Close(c Closer) *App {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.closers = append(a.closers, c)
+	a.mu.Unlock()
+
+	return a
 }
 
 // run safely invokes Runner component in a goroutine with panic recovery mechanism.
