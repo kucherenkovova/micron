@@ -209,7 +209,7 @@ func (a *App) setError(err error) {
 }
 
 func (a *App) setupGracefulShutdown(ctx context.Context) {
-	defer a.cancel()
+	defer a.Stop(ctx)
 
 	signaled := make(chan os.Signal, 1)
 	signal.Notify(signaled, syscall.SIGINT, syscall.SIGTERM)
