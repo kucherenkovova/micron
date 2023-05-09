@@ -42,8 +42,6 @@ type App struct {
 	log     Logger
 }
 
-type Option func(*App)
-
 func NewApp(opts ...Option) *App {
 	app := &App{
 		log: logger.New(logger.DEBUG),
