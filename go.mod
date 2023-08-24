@@ -3,9 +3,9 @@ module github.com/kucherenkovova/micron
 go 1.21
 
 require (
-	github.com/golang/mock v1.6.0
 	github.com/stretchr/testify v1.8.2
 	go.uber.org/goleak v1.2.1
+	go.uber.org/mock v0.2.0
 )
 
 require (
