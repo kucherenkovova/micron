@@ -1,11 +1,9 @@
 package micron
 
-import "github.com/kucherenkovova/micron/logger"
-
 type Option func(*App)
 
-func WithLogLevel(lvl logger.Level) Option {
+func WithLogger(log Logger) Option {
 	return func(app *App) {
-		app.log = logger.New(lvl)
+		app.log = log
 	}
 }
