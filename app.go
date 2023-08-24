@@ -3,19 +3,18 @@ package micron
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
-
-	"github.com/kucherenkovova/micron/logger"
 )
 
 type Logger interface {
-	Debug(string)
-	Info(string)
-	Warn(string)
-	Error(string)
+	Debug(msg string, args ...any)
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
 }
 
 type App struct {
@@ -43,12 +42,15 @@ type App struct {
 }
 
 func NewApp(opts ...Option) *App {
-	app := &App{
-		log: logger.New(logger.DEBUG),
-	}
+	app := &App{}
 
 	for _, option := range opts {
 		option(app)
+	}
+	if app.log == nil {
+		app.log = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		}))
 	}
 
 	return app
