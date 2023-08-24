@@ -47,6 +47,7 @@ func NewApp(opts ...Option) *App {
 	for _, option := range opts {
 		option(app)
 	}
+
 	if app.log == nil {
 		app.log = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 			Level: slog.LevelDebug,
