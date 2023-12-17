@@ -58,6 +58,8 @@ func NewApp(opts ...Option) *App {
 }
 
 func (a *App) Start(ctx context.Context) error {
+	defer a.stop(ctx)
+
 	a.mu.Lock()
 	if a.state != uninitialized {
 		a.mu.Unlock()
@@ -65,8 +67,7 @@ func (a *App) Start(ctx context.Context) error {
 		return fmt.Errorf("can't start application in %s state", a.state)
 	}
 
-	ctx, a.cancel = context.WithCancel(ctx)
-	go a.setupGracefulShutdown(ctx)
+	ctx, a.cancel = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 
 	for _, i := range a.initializers {
 		if err := a.initialize(ctx, i); err != nil {
@@ -94,7 +95,10 @@ func (a *App) Stop(ctx context.Context) error {
 	defer a.mu.Unlock()
 	defer a.recover()
 
-	if a.state != running {
+	if a.state == stopped {
+		a.log.Warn("attempted to stop the application, but it's already stopped")
+		return nil
+	} else if a.state != running { // todo: think of an app stuck in initialized state
 		return fmt.Errorf("can't stop application in %s state", a.state)
 	}
 
@@ -211,17 +215,9 @@ func (a *App) setError(err error) {
 	})
 }
 
-func (a *App) setupGracefulShutdown(ctx context.Context) {
-	defer a.Stop(ctx)
-
-	signaled := make(chan os.Signal, 1)
-	signal.Notify(signaled, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case s := <-signaled:
-		a.log.Debug(fmt.Sprintf("exiting %s", s))
-		signal.Stop(signaled)
-	case <-ctx.Done():
-		signal.Stop(signaled)
+func (a *App) stop(ctx context.Context) {
+	if err := a.Stop(ctx); err != nil {
+		a.log.Warn(fmt.Sprintf("failed to stop application: %v", err))
 	}
 }
 
