@@ -97,6 +97,7 @@ func (a *App) Stop(ctx context.Context) error {
 
 	if a.state == stopped {
 		a.log.Warn("attempted to stop the application, but it's already stopped")
+
 		return nil
 	} else if a.state != running { // todo: think of an app stuck in initialized state
 		return fmt.Errorf("can't stop application in %s state", a.state)

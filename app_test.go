@@ -58,7 +58,7 @@ func (ts *tSuite) TestApp_InitOrder() {
 
 	go closeAfter(ts.done, 10*time.Millisecond)
 
-	ts.NoError(ts.app.Start(ctx))
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
 
@@ -76,7 +76,7 @@ func (ts *tSuite) TestApp_InitAndRunOrder() {
 
 	go closeAfter(ts.done, 10*time.Millisecond)
 
-	ts.NoError(ts.app.Start(ctx))
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
 
@@ -95,7 +95,7 @@ func (ts *tSuite) TestApp_CloseOrder() {
 		<-time.After(10 * time.Millisecond)
 		close(ts.done)
 	}()
-	ts.NoError(ts.app.Start(ctx))
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
 
@@ -117,7 +117,7 @@ func (ts *tSuite) TestApp_NoLeakedGoroutines() {
 
 	go closeAfter(ts.done, 10*time.Millisecond)
 
-	ts.NoError(ts.app.Start(ctx))
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
 
@@ -129,8 +129,8 @@ func (ts *tSuite) TestApp_HandleRunPanic() {
 	}))
 
 	err := ts.app.Start(ctx)
-	ts.Error(err)
-	ts.ErrorContains(err, "panic: ooops")
+	ts.Require().Error(err)
+	ts.Require().ErrorContains(err, "panic: ooops")
 }
 
 func (ts *tSuite) TestApp_HandleInitPanic() {
@@ -142,8 +142,8 @@ func (ts *tSuite) TestApp_HandleInitPanic() {
 
 	err := ts.app.Start(ctx)
 
-	ts.Error(err)
-	ts.ErrorContains(err, "panic: ooops")
+	ts.Require().Error(err)
+	ts.Require().ErrorContains(err, "panic: ooops")
 }
 
 func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
@@ -163,8 +163,8 @@ func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
 
 	err := ts.app.Start(ctx)
 
-	ts.Error(err)
-	ts.ErrorContains(err, "panic: ooops")
+	ts.Require().Error(err)
+	ts.Require().ErrorContains(err, "panic: ooops")
 	ts.True(alertCalled)
 	ts.NotNil(alertCalledWith)
 }
@@ -182,7 +182,7 @@ func (ts *tSuite) TestApp_RegisterInitializerCloserComponent() {
 
 	go closeAfter(ts.done, 10*time.Millisecond)
 
-	ts.NoError(ts.app.Start(ctx))
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
 
