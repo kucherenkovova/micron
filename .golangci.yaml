@@ -20,10 +20,16 @@ linters:
 
 issues:
   exclude-rules:
+    - linters:
+        - contextcheck
+      path: app.go
+      text: "Non-inherited new context, use function like `context.WithXXX` instead"
+
     - path: (.+)_test.go
       linters:
         - gosec
         - unparam
+        - errorlint
 
 # all available settings of specific linters
 linters-settings:

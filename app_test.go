@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/goleak"
 	"go.uber.org/mock/gomock"
@@ -189,4 +190,26 @@ func (ts *tSuite) TestApp_RegisterInitializerCloserComponent() {
 func closeAfter(ch chan struct{}, d time.Duration) {
 	<-time.After(d)
 	close(ch)
+}
+
+func TestAppStopTimeout(t *testing.T) {
+	app := micron.NewApp(micron.WithStopTimeout(2 * time.Second))
+
+	closeTimedOut := false
+
+	app.Close(micron.CloseFunc(func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				closeTimedOut = true
+			}
+		case <-time.After(20 * time.Second):
+			return nil
+		}
+
+		return nil
+	}))
+
+	require.NoError(t, app.Start(context.Background()))
+	require.True(t, closeTimedOut)
 }

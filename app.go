@@ -8,6 +8,11 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
+)
+
+const (
+	defaultStopTimeout = 20 * time.Second
 )
 
 type Logger interface {
@@ -35,14 +40,17 @@ type App struct {
 	// that's invoked in case of app panic.
 	panicHandler func(any)
 
-	mu      sync.Mutex
-	wg      sync.WaitGroup
-	errOnce sync.Once
-	log     Logger
+	stopTimeout time.Duration
+	mu          sync.Mutex
+	wg          sync.WaitGroup
+	errOnce     sync.Once
+	log         Logger
 }
 
 func NewApp(opts ...Option) *App {
-	app := &App{}
+	app := &App{
+		stopTimeout: defaultStopTimeout,
+	}
 
 	for _, option := range opts {
 		option(app)
@@ -58,8 +66,6 @@ func NewApp(opts ...Option) *App {
 }
 
 func (a *App) Start(ctx context.Context) error {
-	defer a.stop(ctx)
-
 	a.mu.Lock()
 	if a.state != uninitialized {
 		a.mu.Unlock()
@@ -71,6 +77,7 @@ func (a *App) Start(ctx context.Context) error {
 
 	for _, i := range a.initializers {
 		if err := a.initialize(ctx, i); err != nil {
+			// todo: would be nice to close already initialized components if this happens
 			return err
 		}
 	}
@@ -85,11 +92,22 @@ func (a *App) Start(ctx context.Context) error {
 	a.mu.Unlock()
 	a.wg.Wait()
 
+	if err := a.Stop(context.Background()); err != nil {
+		a.log.Warn(fmt.Sprintf("failed to stop application: %v", err))
+	}
+
 	return a.err
 }
 
-// Stop provides an interface to gracefully stop an application.
-// We'll attempt to close all the components resources before exiting.
+// Stop will attempt to close all the components resources before exiting.
+// It can be explicitly invoked whenever you want, otherwise it will be called
+// automatically by the App instance in one of the following cases:
+// - after all the runners return
+// - when the context passed to Start is canceled
+// - after a SIGNINT or SIGTERM signal is received
+//
+// It's safe to call Stop multiple times, but only the first call will do the actual work.
+// Please note that Stop is not guaranteed to be called in case of a panic.
 func (a *App) Stop(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -101,6 +119,13 @@ func (a *App) Stop(ctx context.Context) error {
 		return nil
 	} else if a.state != running { // todo: think of an app stuck in initialized state
 		return fmt.Errorf("can't stop application in %s state", a.state)
+	}
+
+	if a.stopTimeout > 0 {
+		wrappedCtx, cancel := context.WithTimeout(ctx, a.stopTimeout)
+		ctx = wrappedCtx
+
+		defer cancel()
 	}
 
 	a.state = stopping
@@ -214,12 +239,6 @@ func (a *App) setError(err error) {
 		a.err = err
 		a.cancel()
 	})
-}
-
-func (a *App) stop(ctx context.Context) {
-	if err := a.Stop(ctx); err != nil {
-		a.log.Warn(fmt.Sprintf("failed to stop application: %v", err))
-	}
 }
 
 // initialize is a helper function to safely invoke Initializer component with panic recovery mechanism.
