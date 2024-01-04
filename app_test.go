@@ -1,14 +1,16 @@
-package micron
+package micron_test
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/goleak"
 	"go.uber.org/mock/gomock"
 
+	"github.com/kucherenkovova/micron"
 	"github.com/kucherenkovova/micron/mocks"
 )
 
@@ -17,21 +19,21 @@ import (
 
 // this interface is used only for mocks generation.
 type irc interface { //nolint:unused
-	Initializer
-	Runner
-	Closer
+	micron.Initializer
+	micron.Runner
+	micron.Closer
 }
 
 type tSuite struct {
 	suite.Suite
 	ctrl *gomock.Controller
-	app  *App
+	app  *micron.App
 	done chan struct{}
 }
 
 func (ts *tSuite) SetupTest() {
 	ts.ctrl = gomock.NewController(ts.T())
-	ts.app = NewApp()
+	ts.app = micron.NewApp()
 	ts.done = make(chan struct{})
 }
 
@@ -55,13 +57,9 @@ func (ts *tSuite) TestApp_InitOrder() {
 	ts.app.Init(first)
 	ts.app.Init(second)
 
-	go func() {
-		<-time.After(10 * time.Millisecond)
-		ts.NoError(ts.app.Stop(context.Background()))
-		close(ts.done)
-	}()
+	go closeAfter(ts.done, 10*time.Millisecond)
 
-	ts.NoError(ts.app.Start(ctx))
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
 
@@ -77,12 +75,9 @@ func (ts *tSuite) TestApp_InitAndRunOrder() {
 	ts.app.Init(initme)
 	ts.app.Run(runme)
 
-	go func() {
-		<-time.After(10 * time.Millisecond)
-		ts.NoError(ts.app.Stop(context.Background()))
-		close(ts.done)
-	}()
-	ts.NoError(ts.app.Start(ctx))
+	go closeAfter(ts.done, 10*time.Millisecond)
+
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
 
@@ -99,10 +94,9 @@ func (ts *tSuite) TestApp_CloseOrder() {
 
 	go func() {
 		<-time.After(10 * time.Millisecond)
-		ts.NoError(ts.app.Stop(context.Background()))
 		close(ts.done)
 	}()
-	ts.NoError(ts.app.Start(ctx))
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
 
@@ -111,49 +105,46 @@ func (ts *tSuite) TestApp_NoLeakedGoroutines() {
 
 	ctx := context.Background()
 
-	ts.app.Init(InitFunc(func(context.Context) error {
+	ts.app.Init(micron.InitFunc(func(context.Context) error {
 		return nil
 	}))
-	ts.app.Run(RunFunc(func(context.Context) error {
+	ts.app.Run(micron.RunFunc(func(context.Context) error {
 		return nil
 	}))
-	ts.app.Close(CloseFunc(func(context.Context) error {
+	ts.app.Close(micron.CloseFunc(func(context.Context) error {
 		return nil
 	}))
 	ts.app.OnPanic(func(any) {})
 
-	go func() {
-		<-time.After(10 * time.Millisecond)
-		ts.NoError(ts.app.Stop(context.Background()))
-		close(ts.done)
-	}()
-	ts.NoError(ts.app.Start(ctx))
+	go closeAfter(ts.done, 10*time.Millisecond)
+
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
 
 func (ts *tSuite) TestApp_HandleRunPanic() {
 	ctx := context.Background()
 
-	ts.app.Run(RunFunc(func(ctx context.Context) error {
+	ts.app.Run(micron.RunFunc(func(ctx context.Context) error {
 		panic("ooops")
 	}))
 
 	err := ts.app.Start(ctx)
-	ts.Error(err)
-	ts.ErrorContains(err, "panic: ooops")
+	ts.Require().Error(err)
+	ts.Require().ErrorContains(err, "panic: ooops")
 }
 
 func (ts *tSuite) TestApp_HandleInitPanic() {
 	ctx := context.Background()
 
-	ts.app.Init(InitFunc(func(ctx context.Context) error {
+	ts.app.Init(micron.InitFunc(func(ctx context.Context) error {
 		panic("ooops")
 	}))
 
 	err := ts.app.Start(ctx)
 
-	ts.Error(err)
-	ts.ErrorContains(err, "panic: ooops")
+	ts.Require().Error(err)
+	ts.Require().ErrorContains(err, "panic: ooops")
 }
 
 func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
@@ -167,14 +158,14 @@ func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
 		alertCalled = true
 		alertCalledWith = a
 	})
-	ts.app.Init(InitFunc(func(ctx context.Context) error {
+	ts.app.Init(micron.InitFunc(func(ctx context.Context) error {
 		panic("ooops")
 	}))
 
 	err := ts.app.Start(ctx)
 
-	ts.Error(err)
-	ts.ErrorContains(err, "panic: ooops")
+	ts.Require().Error(err)
+	ts.Require().ErrorContains(err, "panic: ooops")
 	ts.True(alertCalled)
 	ts.NotNil(alertCalledWith)
 }
@@ -190,12 +181,35 @@ func (ts *tSuite) TestApp_RegisterInitializerCloserComponent() {
 
 	ts.app.Register(component)
 
-	go func() {
-		<-time.After(10 * time.Millisecond)
-		ts.NoError(ts.app.Stop(context.Background()))
-		close(ts.done)
-	}()
+	go closeAfter(ts.done, 10*time.Millisecond)
 
-	ts.NoError(ts.app.Start(ctx))
+	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
+}
+
+func closeAfter(ch chan struct{}, d time.Duration) {
+	<-time.After(d)
+	close(ch)
+}
+
+func TestAppStopTimeout(t *testing.T) {
+	app := micron.NewApp(micron.WithStopTimeout(2 * time.Second))
+
+	closeTimedOut := false
+
+	app.Close(micron.CloseFunc(func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				closeTimedOut = true
+			}
+		case <-time.After(20 * time.Second):
+			return nil
+		}
+
+		return nil
+	}))
+
+	require.NoError(t, app.Start(context.Background()))
+	require.True(t, closeTimedOut)
 }
