@@ -2,17 +2,27 @@ package micron
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/kucherenkovova/safegroup"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
 	defaultStopTimeout = 20 * time.Second
+)
+
+var (
+	ErrPanic       = errors.New("panic occurred")
+	ErrStopTimeout = errors.New("stop timeout exceeded")
 )
 
 type Logger interface {
@@ -23,32 +33,35 @@ type Logger interface {
 }
 
 type App struct {
-	// state stores current App state
-	state state
-
 	// application components
-	initializers []Initializer
-	runners      []Runner
-	closers      []Closer
+	initializers     []Initializer
+	syncInitializers []Initializer
+	runners          []Runner
+	closers          []Closer
+	syncClosers      []Closer
 
-	// callback function used to cancel applicatoin context
-	cancel context.CancelFunc
+	// concurrency is the number of goroutines to use for initialization and closing.
+	// Default value is runtime.NumCPU().
+	concurrency int
 
-	err error
-
-	// panicHandler stores a callback function
+	// handlePanicFn stores a callback function
 	// that's invoked in case of app panic.
-	panicHandler func(any)
+	handlePanicFn func(any)
 
+	// enableGracefulShutdown is a flag that indicates whether to
+	// stop the application on syscall.SIGINT and syscall.SIGTERM signals.
+	enableGracefulShutdown bool
+
+	// stopTimeout is the maximum amount of time to wait for the application to stop.
 	stopTimeout time.Duration
-	mu          sync.Mutex
-	wg          sync.WaitGroup
-	errOnce     sync.Once
-	log         Logger
+
+	mu  sync.Mutex
+	log Logger
 }
 
 func NewApp(opts ...Option) *App {
 	app := &App{
+		concurrency: runtime.NumCPU(),
 		stopTimeout: defaultStopTimeout,
 	}
 
@@ -65,98 +78,173 @@ func NewApp(opts ...Option) *App {
 	return app
 }
 
-func (a *App) Start(ctx context.Context) error {
-	a.mu.Lock()
-	if a.state != uninitialized {
-		a.mu.Unlock()
+func (a *App) Start(ctx context.Context) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			a.handlePanic(r)
+			err = fmt.Errorf("micron app: %w: %v", ErrPanic, r)
+		}
+	}()
 
-		return fmt.Errorf("can't start application in %s state", a.state)
+	if a.enableGracefulShutdown {
+		var cancel context.CancelFunc
+		ctx, cancel = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+		defer cancel()
 	}
 
-	ctx, a.cancel = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	if err := a.initialize(ctx); err != nil {
+		return err
+	}
 
-	for _, i := range a.initializers {
-		if err := a.initialize(ctx, i); err != nil {
-			// todo: would be nice to close already initialized components if this happens
+	if err := a.run(ctx); err != nil {
+		return err
+	}
+
+	return a.close(context.Background())
+}
+
+func (a *App) initialize(ctx context.Context) error {
+	// todo: think about closing all the initialized components if one of them fails
+
+	for i := range a.syncInitializers {
+		if err := a.syncInitializers[i].Init(ctx); err != nil {
 			return err
 		}
 	}
 
-	a.state = initialized
-
-	for _, r := range a.runners {
-		a.run(ctx, r)
+	if len(a.initializers) == 0 {
+		return nil
 	}
 
-	a.state = running
-	a.mu.Unlock()
-	a.wg.Wait()
+	g, ctx := safegroup.WithContext(ctx)
+	g.SetLimit(a.concurrency)
 
-	if err := a.Stop(context.Background()); err != nil {
-		a.log.Warn(fmt.Sprintf("failed to stop application: %v", err))
+	for i := range a.initializers {
+		i := i
+		g.Go(func() error {
+			return a.initializers[i].Init(ctx)
+		})
 	}
 
-	return a.err
+	err := g.Wait()
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, safegroup.ErrPanic) {
+		err = fmt.Errorf("initialize %w: %w", ErrPanic, err)
+		a.handlePanic(err)
+	}
+
+	return err
 }
 
-// Stop will attempt to close all the components resources before exiting.
-// It can be explicitly invoked whenever you want, otherwise it will be called
-// automatically by the App instance in one of the following cases:
-// - after all the runners return
-// - when the context passed to Start is canceled
-// - after a SIGNINT or SIGTERM signal is received
-//
-// It's safe to call Stop multiple times, but only the first call will do the actual work.
-// Please note that Stop is not guaranteed to be called in case of a panic.
-func (a *App) Stop(ctx context.Context) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	defer a.recover()
-
-	if a.state == stopped {
-		a.log.Warn("attempted to stop the application, but it's already stopped")
-
-		return nil
-	} else if a.state != running { // todo: think of an app stuck in initialized state
-		return fmt.Errorf("can't stop application in %s state", a.state)
+func (a *App) run(ctx context.Context) error {
+	g, ctx := safegroup.WithContext(ctx)
+	for _, r := range a.runners {
+		r := r
+		g.Go(func() error {
+			return r.Run(ctx)
+		})
 	}
 
-	if a.stopTimeout > 0 {
-		wrappedCtx, cancel := context.WithTimeout(ctx, a.stopTimeout)
-		ctx = wrappedCtx
+	err := g.Wait()
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, safegroup.ErrPanic) {
+		err = fmt.Errorf("run %w: %w", ErrPanic, err)
+		a.handlePanic(err)
+	}
 
+	return err
+}
+
+func (a *App) close(ctx context.Context) (err error) {
+	if a.stopTimeout > 0 {
+		wrappedCtx, cancel := context.WithTimeoutCause(ctx, a.stopTimeout, ErrStopTimeout)
+		ctx = wrappedCtx
 		defer cancel()
 	}
 
-	a.state = stopping
 	// Close components in reverse order
-	for i := len(a.closers) - 1; i >= 0; i-- {
-		if err := a.closers[i].Close(ctx); err != nil {
-			a.log.Warn(fmt.Sprintf("failed to stop component: %v", err))
+	for i := len(a.syncClosers) - 1; i >= 0; i-- {
+		if e := a.syncClosers[i].Close(ctx); e != nil {
+			a.log.Warn(fmt.Sprintf("failed to close component: %v", e))
+			err = e
 		}
 	}
-	a.log.Debug("call cancel func")
-	a.cancel()
-	a.log.Debug("set state as stopped")
+	if len(a.closers) == 0 {
+		return nil
+	}
 
-	a.state = stopped
+	// Attempt to close the components concurrently, but limit the number of concurrent goroutines.
+	// We use a semaphore, not safegroup here because we want other closers to be called even if one of them fails.
+	sem := semaphore.NewWeighted(int64(a.concurrency))
+	for i := range a.closers {
+		if err := sem.Acquire(ctx, 1); err != nil {
+			a.log.Warn("failed to acquire semaphore: %v", err)
+		}
 
-	return nil
+		go func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("close: %w: %v", ErrPanic, r)
+				}
+			}()
+			defer sem.Release(1)
+
+			if e := a.closers[i].Close(ctx); e != nil {
+				a.log.Warn(fmt.Sprintf("failed to close component: %v", e))
+				err = e
+			}
+		}(i)
+	}
+	// wait for all the components to close
+	if err := sem.Acquire(ctx, int64(a.concurrency)); err != nil {
+		a.log.Warn("failed to acquire semaphore: %v", err)
+	}
+
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, safegroup.ErrPanic):
+		err = fmt.Errorf("close: %w: %w", ErrPanic, err)
+		a.handlePanic(err)
+	case errors.Is(err, context.Canceled):
+		err = fmt.Errorf("close: %w: %w", err, context.Cause(ctx))
+	}
+
+	return err
+}
+
+type ComponentConfig struct {
+	initSync  bool
+	closeSync bool
 }
 
 // Register is a shorthand function to register a component that
 // implements multiple micron lifecycle hooks.
-func (a *App) Register(component any) *App {
+func (a *App) Register(component any, opts ...RegisterOption) *App {
 	if component == nil {
-		a.log.Warn("nil component registered")
+		a.log.Warn("nil component registered, this is probably a misconfiguration of your application")
 
 		return a
+	}
+
+	config := &ComponentConfig{}
+	for _, opt := range opts {
+		opt(config)
 	}
 
 	knownComponentType := false
 
 	if i, ok := component.(Initializer); ok {
-		a.initializers = append(a.initializers, i)
+		if config.initSync {
+			a.InitSync(i)
+		} else {
+			a.Init(i)
+		}
 		knownComponentType = true
 	}
 
@@ -165,8 +253,12 @@ func (a *App) Register(component any) *App {
 		knownComponentType = true
 	}
 
-	if s, ok := component.(Closer); ok {
-		a.closers = append(a.closers, s)
+	if c, ok := component.(Closer); ok {
+		if config.closeSync {
+			a.CloseSync(c)
+		} else {
+			a.Close(c)
+		}
 		knownComponentType = true
 	}
 
@@ -178,10 +270,20 @@ func (a *App) Register(component any) *App {
 }
 
 // Init registers Initializer component.
-// Initializer components are invoked during application Start process before Run happens.
+// Initializer components registered using this method will be run concurrently during the application Start process.
 func (a *App) Init(i Initializer) *App {
 	a.mu.Lock()
 	a.initializers = append(a.initializers, i)
+	a.mu.Unlock()
+
+	return a
+}
+
+// InitSync registers Initializer component.
+// Initializer components registered using this method will be run sequentially during the application Start process.
+func (a *App) InitSync(i Initializer) *App {
+	a.mu.Lock()
+	a.syncInitializers = append(a.syncInitializers, i)
 	a.mu.Unlock()
 
 	return a
@@ -197,7 +299,7 @@ func (a *App) Run(r Runner) *App {
 }
 
 // Close registers Closer component.
-// Closer components are invoked during application Stop process.
+// Closer components registered using this method will be run concurrently during the application Stop process.
 func (a *App) Close(c Closer) *App {
 	a.mu.Lock()
 	a.closers = append(a.closers, c)
@@ -206,48 +308,18 @@ func (a *App) Close(c Closer) *App {
 	return a
 }
 
-// run safely invokes Runner component in a goroutine with panic recovery mechanism.
-func (a *App) run(ctx context.Context, r Runner) {
-	a.wg.Add(1)
+// CloseSync registers Closer component.
+// Closer components registered using this method will be run sequentially during the application Stop process.
+func (a *App) CloseSync(c Closer) *App {
+	a.mu.Lock()
+	a.syncClosers = append(a.syncClosers, c)
+	a.mu.Unlock()
 
-	go func() {
-		defer a.wg.Done()
-		defer a.recover()
-
-		if err := r.Run(ctx); err != nil {
-			a.setError(err)
-		}
-	}()
+	return a
 }
 
-func (a *App) recover() {
-	r := recover()
-	if r == nil {
-		return
+func (a *App) handlePanic(r any) {
+	if a.handlePanicFn != nil {
+		a.handlePanicFn(r)
 	}
-
-	if a.panicHandler != nil {
-		a.panicHandler(r)
-	}
-
-	a.log.Error(fmt.Sprintf("recovered from panic: %v", r))
-	a.setError(fmt.Errorf("panic: %v", r))
-}
-
-func (a *App) setError(err error) {
-	a.errOnce.Do(func() {
-		a.err = err
-		a.cancel()
-	})
-}
-
-// initialize is a helper function to safely invoke Initializer component with panic recovery mechanism.
-func (a *App) initialize(ctx context.Context, i Initializer) error {
-	defer a.recover()
-
-	if err := i.Init(ctx); err != nil {
-		return fmt.Errorf("failed to initialize component: %w", err)
-	}
-
-	return nil
 }
