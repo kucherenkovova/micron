@@ -144,7 +144,7 @@ func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
 	err := ts.app.Start(ctx)
 
 	ts.Require().Error(err)
-	ts.Require().ErrorContains(err, "panic: ooops")
+	ts.Require().ErrorIs(err, micron.ErrPanic)
 	ts.True(alertCalled)
 	ts.NotNil(alertCalledWith)
 }
