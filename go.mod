@@ -3,7 +3,7 @@ module github.com/kucherenkovova/micron
 go 1.21
 
 require (
-	github.com/kucherenkovova/safegroup v1.0.1
+	github.com/kucherenkovova/safegroup v1.0.2
 	github.com/stretchr/testify v1.8.4
 	go.uber.org/mock v0.4.0
 	golang.org/x/sync v0.6.0
