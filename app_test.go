@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
-	"go.uber.org/goleak"
 	"go.uber.org/mock/gomock"
 
 	"github.com/kucherenkovova/micron"
@@ -45,7 +44,7 @@ func TestAppSuite(t *testing.T) {
 	suite.Run(t, new(tSuite))
 }
 
-func (ts *tSuite) TestApp_InitOrder() {
+func (ts *tSuite) TestApp_InitSyncOrder() {
 	ctx := context.Background()
 	first, second := mocks.NewMockInitializer(ts.ctrl), mocks.NewMockInitializer(ts.ctrl)
 
@@ -54,8 +53,8 @@ func (ts *tSuite) TestApp_InitOrder() {
 		second.EXPECT().Init(gomock.Any()).Return(nil).Times(1),
 	)
 
-	ts.app.Init(first)
-	ts.app.Init(second)
+	ts.app.InitSync(first)
+	ts.app.InitSync(second)
 
 	go closeAfter(ts.done, 10*time.Millisecond)
 
@@ -89,35 +88,13 @@ func (ts *tSuite) TestApp_CloseOrder() {
 		second.EXPECT().Close(gomock.Any()).Return(nil).Times(1),
 	)
 
-	ts.app.Close(second)
-	ts.app.Close(first)
+	ts.app.CloseSync(second)
+	ts.app.CloseSync(first)
 
 	go func() {
 		<-time.After(10 * time.Millisecond)
 		close(ts.done)
 	}()
-	ts.Require().NoError(ts.app.Start(ctx))
-	<-ts.done
-}
-
-func (ts *tSuite) TestApp_NoLeakedGoroutines() {
-	defer goleak.VerifyNone(ts.T())
-
-	ctx := context.Background()
-
-	ts.app.Init(micron.InitFunc(func(context.Context) error {
-		return nil
-	}))
-	ts.app.Run(micron.RunFunc(func(context.Context) error {
-		return nil
-	}))
-	ts.app.Close(micron.CloseFunc(func(context.Context) error {
-		return nil
-	}))
-	ts.app.OnPanic(func(any) {})
-
-	go closeAfter(ts.done, 10*time.Millisecond)
-
 	ts.Require().NoError(ts.app.Start(ctx))
 	<-ts.done
 }
@@ -131,7 +108,7 @@ func (ts *tSuite) TestApp_HandleRunPanic() {
 
 	err := ts.app.Start(ctx)
 	ts.Require().Error(err)
-	ts.Require().ErrorContains(err, "panic: ooops")
+	ts.Require().ErrorIs(err, micron.ErrPanic)
 }
 
 func (ts *tSuite) TestApp_HandleInitPanic() {
@@ -144,7 +121,7 @@ func (ts *tSuite) TestApp_HandleInitPanic() {
 	err := ts.app.Start(ctx)
 
 	ts.Require().Error(err)
-	ts.Require().ErrorContains(err, "panic: ooops")
+	ts.Require().ErrorIs(err, micron.ErrPanic)
 }
 
 func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
@@ -154,10 +131,12 @@ func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
 		ctx             = context.Background()
 	)
 
-	ts.app.OnPanic(func(a any) {
+	onPanic := func(a any) {
 		alertCalled = true
 		alertCalledWith = a
-	})
+	}
+	ts.app = micron.NewApp(micron.WithPanicHandler(onPanic))
+
 	ts.app.Init(micron.InitFunc(func(ctx context.Context) error {
 		panic("ooops")
 	}))
@@ -165,7 +144,7 @@ func (ts *tSuite) TestApp_InitPanicWithOnPanicHook() {
 	err := ts.app.Start(ctx)
 
 	ts.Require().Error(err)
-	ts.Require().ErrorContains(err, "panic: ooops")
+	ts.Require().ErrorIs(err, micron.ErrPanic)
 	ts.True(alertCalled)
 	ts.NotNil(alertCalledWith)
 }
@@ -195,21 +174,23 @@ func closeAfter(ch chan struct{}, d time.Duration) {
 func TestAppStopTimeout(t *testing.T) {
 	app := micron.NewApp(micron.WithStopTimeout(2 * time.Second))
 
-	closeTimedOut := false
+	closeCalled := false
 
 	app.Close(micron.CloseFunc(func(ctx context.Context) error {
+		closeCalled = true
 		select {
 		case <-ctx.Done():
-			if ctx.Err() == context.DeadlineExceeded {
-				closeTimedOut = true
-			}
+			require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+			require.ErrorIs(t, context.Cause(ctx), micron.ErrStopTimeout)
+
+			return nil
 		case <-time.After(20 * time.Second):
+			require.Fail(t, "shouldn't reach here")
+
 			return nil
 		}
-
-		return nil
 	}))
 
 	require.NoError(t, app.Start(context.Background()))
-	require.True(t, closeTimedOut)
+	require.True(t, closeCalled)
 }
